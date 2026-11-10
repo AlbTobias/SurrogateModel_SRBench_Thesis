@@ -1,0 +1,58 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments and local interpreter selection
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Test, coverage, and static-analysis caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# Packaging and build output
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Downloaded and generated benchmark datasets. Keep data/README.md tracked.
+/data/*/
+*.download
+
+# Framework working directories and other non-public runtime artefacts.
+# Completed trial JSON, analysis sidecars, summaries, and figures remain tracked.
+/results/runtime/
+hall_of_fame_*
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+tmp_*
+
+# Local environment variables and credentials
+.env
+.env.*
+!.env.example
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Editor and operating-system metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
