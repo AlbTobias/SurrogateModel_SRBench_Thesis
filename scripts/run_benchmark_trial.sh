@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+algorithm="${1:?Usage: scripts/run_benchmark_trial.sh ALGORITHM SEED [PROBLEM] [INPUT_SCALING]}"
+seed="${2:?Usage: scripts/run_benchmark_trial.sh ALGORITHM SEED [PROBLEM] [INPUT_SCALING]}"
+problem="${3:-cantilever}"
+input_scaling="${4:-raw}"
+config_file="${BENCHMARK_CONFIG:-configs/benchmark_suite_v11.json}"
+config_path="$project_dir/$config_file"
+if [[ ! -f "$config_path" ]]; then
+  echo "Benchmark configuration not found: $config_path" >&2
+  exit 2
+fi
+benchmark_name="$("$project_dir/.venv/bin/python" -c \
+  'import json, sys; print(json.load(open(sys.argv[1]))["name"])' "$config_path")"
+benchmark_threads="$("$project_dir/.venv/bin/python" -c \
+  'import json, sys; c=json.load(open(sys.argv[1])); print(c.get("execution_controls", {}).get("threads", 1))' "$config_path")"
+if ! "$project_dir/.venv/bin/python" -c \
+  'import json, sys; c=json.load(open(sys.argv[1])); raise SystemExit(0 if sys.argv[2] in c["problems"] else 1)' \
+  "$config_path" "$problem"; then
+  echo "Unknown problem for $config_file: $problem" >&2
+  exit 2
+fi
+if ! "$project_dir/.venv/bin/python" -c \
+  'import json, sys; c=json.load(open(sys.argv[1])); raise SystemExit(0 if sys.argv[2] in c["algorithms"] else 1)' \
+  "$config_path" "$algorithm"; then
+  echo "Unknown algorithm for $config_file: $algorithm" >&2
+  exit 2
+fi
+case "$input_scaling" in
+  raw|domain_minmax) ;;
+  *)
+    echo "Unknown input scaling: $input_scaling (expected raw or domain_minmax)" >&2
+    exit 2
+    ;;
+esac
+locked_image="$(awk -F= -v algorithm="$algorithm" \
+  '$1 == algorithm {print substr($0, index($0, "=") + 1)}' \
+  "$project_dir/containers/images.lock")"
+
+if [[ -z "$locked_image" ]]; then
+  echo "No image is locked for algorithm: $algorithm" >&2
+  exit 2
+fi
+
+# Keep framework-generated working files under results/runtime while placing
+# the immutable trial JSON and explicit failure record in their public result
+# directories. Runtime files are not part of the publication export.
+mkdir -p \
+  "$project_dir/data/$problem" \
+  "$project_dir/results/$problem/$benchmark_name/$input_scaling/$algorithm" \
+  "$project_dir/results/$problem/$benchmark_name/$input_scaling/failures/$algorithm" \
+  "$project_dir/results/runtime/$benchmark_name/$problem/$input_scaling/$algorithm/seed-$seed"
+
+failure_file="$project_dir/results/$problem/$benchmark_name/$input_scaling/failures/$algorithm/seed-$seed.json"
+# Record preparation, container, or evaluation errors as explicit failed
+# trials. The trap is disabled after a successful run and any stale failure
+# record for that trial is then removed.
+record_failure() {
+  exit_code=$?
+  "$project_dir/.venv/bin/python" -c \
+    'import json, pathlib, sys; pathlib.Path(sys.argv[1]).write_text(json.dumps({"problem": sys.argv[2], "input_scaling": sys.argv[3], "algorithm": sys.argv[4], "seed": int(sys.argv[5]), "status": "failed", "exit_code": int(sys.argv[6])}, indent=2) + "\n")' \
+    "$failure_file" "$problem" "$input_scaling" "$algorithm" "$seed" "$exit_code"
+}
+trap record_failure ERR
+
+# External datasets require source download, validation, and deterministic
+# splitting; analytical problems instead generate their tables directly from
+# the registered equations and domains.
+if [[ "$problem" == "ccpp" || "$problem" == "naval_propulsion" || "$problem" == "gas_turbine_nox" || "$problem" == "concrete_strength" || "$problem" == "energy_efficiency_heating" || "$problem" == "airfoil_self_noise" || "$problem" == "yacht_hydrodynamics" || "$problem" == "electrical_grid_stability" || "$problem" == "lattice_physics_kinf" ]]; then
+  dataset_script="$project_dir/surrogate/prepare_$problem.py"
+else
+  dataset_script="$project_dir/surrogate/generate_$problem.py"
+fi
+"$project_dir/.venv/bin/python" "$dataset_script" --output-dir "$project_dir/data/$problem"
+
+# Apply the shared thread limit to common numerical backends so each pinned
+# container uses the same requested CPU parallelism. JAX uses 64-bit arithmetic
+# to avoid framework-specific loss of numerical precision.
+docker run --rm \
+  --volume "$project_dir:/workspace" \
+  --workdir "/workspace/results/runtime/$benchmark_name/$problem/$input_scaling/$algorithm/seed-$seed" \
+  --env PYTHONPATH=/workspace \
+  --env OMP_NUM_THREADS="$benchmark_threads" \
+  --env OPENBLAS_NUM_THREADS="$benchmark_threads" \
+  --env MKL_NUM_THREADS="$benchmark_threads" \
+  --env JAX_ENABLE_X64=true \
+  "$locked_image" \
+    python -m experiment.evaluate_surrogate \
+    --algorithm "$algorithm" \
+    --problem "$problem" \
+    --train "/workspace/data/$problem/train.tsv.gz" \
+    --test "/workspace/data/$problem/test.tsv.gz" \
+    --output "/workspace/results/$problem/$benchmark_name/$input_scaling/$algorithm/seed-$seed.json" \
+    --seed "$seed" \
+    --input-scaling "$input_scaling" \
+    --profile benchmark \
+    --config "/workspace/$config_file"
+
+trap - ERR
+rm -f "$failure_file"

@@ -1,0 +1,196 @@
+# Complexity, interpretability, and runtime evaluation
+
+This document defines how the benchmark evaluates symbolic expressions and
+execution time. Predictive accuracy remains necessary, but it is not used as a
+substitute for interpretability or symbolic recovery.
+
+## Input-scaling conditions
+
+The current `benchmark_suite_v11` experiment runs every problem, algorithm, and
+repetition in two separate conditions. This protocol was introduced in
+`benchmark_suite_v3` and retained by the later problem-set extensions:
+
+- `raw`: the stored physical inputs are passed to the estimator unchanged;
+- `domain_minmax`: each input is mapped from its published problem-domain
+  bounds $[l,u]$ to $[-1,1]$ using $z=2(x-l)/(u-l)-1$.
+
+The fixed published bounds are used instead of training-sample minima and
+maxima. This avoids data-dependent transformations, prevents test leakage, and
+makes the coordinate system identical across seeds. Targets remain in their
+original units in both conditions. Result JSON files record the condition,
+formula, bounds, and the fact that no target scaling was applied.
+
+For a normalized run, `symbolic_model` is the expression returned in normalized
+coordinates. If it can be parsed, the evaluator substitutes the coordinate
+definitions to produce `raw_scale_symbolic_model`. The unprefixed complexity 
+fields are computed from this physical-coordinate
+expression. Fields prefixed with `training_scale_` describe the expression as
+seen by the algorithm. A failed back-transformation is recorded explicitly and
+does not silently substitute the normalized expression for a physical one.
+
+Each expression-analysis subprocess has a 2 GiB virtual-memory limit in
+addition to the per-stage time limit. If a resource-intensive SymPy operation
+terminates the first attempt, the expression is analyzed again without
+algebraic simplification. Parsing and unsimplified structural measures are then
+retained, and the result is explicitly marked as an unsimplified fallback.
+
+## Final repetition protocol
+
+The final suite uses the first ten prime numbers as its predefined repetition
+seeds: 2, 3, 5, 7, 11, 13, 17, 19, 23, and 29. For every
+algorithm/problem/scaling combination this gives 6 algorithms × 15 problems × 2
+scaling conditions × 10 repetitions = 1,800 expected trials. The choice of prime
+numbers has no special statistical meaning; it is simply a fixed, distinct,
+documented set selected before the final experiment. Train and test datasets
+are regenerated from fixed problem-specific dataset seeds, not from the
+algorithm seed, so every trial receives identical samples. Each result records
+SHA-256 hashes of the uncompressed train and test tables to make this invariant
+auditable.
+
+The repetition label is passed into every estimator that exposes a supported
+seed parameter. ITEA's published estimator does not expose one, so its ten runs
+are reported as **uncontrolled repetitions**, never as seeded trials. The
+summary identifies `seed-controlled` and `uncontrolled` repetition types.
+
+A successful result, an explicit failure record, and an absent trial are three
+different states. The group runner writes failure records containing the trial
+coordinates and process exit code. The summary reports successful, failed, and
+missing counts and labels separately; failures are not dropped from the
+denominator or merged silently with missing runs.
+
+## Parameter provenance and computational budgets
+
+The final suite uses one fixed configuration per algorithm and performs no
+hyperparameter search. Its configuration separates three concepts:
+
+- `execution_controls` define shared reproducibility and measurement behavior,
+  including one-thread execution, repeated prediction timing, and the symbolic
+  post-processing timeout. They are not model hyperparameters.
+- `project_budget_override` marks search budgets reduced by this project to
+  make the repeated experiment computationally feasible.
+- `documented_adapter_defaults` restates effective settings already selected by
+  the pinned SRBench adapter so they are visible in the experiment manifest.
+
+PySR has the combined role `project_budget_and_execution_override` because its
+entry both limits the search and enforces deterministic single-process behavior.
+Each entry records a plain-language rationale and nests the estimator values
+under `parameters`. Trial JSONs copy the configuration role, rationale, and
+configured parameters, while `applied_parameters` records the subset accepted
+by the estimator together with its controlled seed where supported. New trial
+results also store the configuration schema version and SHA-256 hash of the
+complete manifest.
+
+The project-selected reductions are gplearn's population/generation budget,
+PySR's iteration and 60-second budget, and GeneticEngine's population,
+generation, and 60-second budget. Operon, ITEA, and EQL restate their effective
+adapter budgets. These choices were fixed for practical repeated evaluation and
+were not selected using final test performance. They do not impose equal
+computational effort: some algorithms are time-limited and others use
+evaluation, iteration, or generation limits. Accordingly, conclusions concern
+performance under these fixed representative configurations, not maximum tuned
+performance or an equal-compute ranking.
+
+## Prediction-shape compatibility
+
+The evaluator requires one prediction per reference-test observation. A scalar
+or one-element prediction is treated as a valid constant regression model and
+is broadcast to the number of test observations before metrics are calculated.
+The trial record identifies this conversion with
+`prediction_scalar_broadcast: true`. This framework-independent rule does not
+change the learned constant or its predictive performance; it only converts the
+adapter output to the usual regression-estimator shape. Any non-scalar output
+whose length differs from the number of test observations remains an error and
+causes the trial to fail.
+
+This rule is required for the legacy GeneticEngine implementation in the pinned
+SRBench image, whose `predict` method returns a scalar when evolution selects a
+constant phenotype. Without broadcasting, such a valid but potentially poor
+model would be misclassified as an execution failure during metric calculation.
+
+## Expression representations
+
+Each trial result retains the adapter's original `symbolic_model`. Separate,
+versioned post-processing parses that string with SymPy and writes a
+`seed-N.analysis.json` sidecar beside the immutable trial JSON. Its parser supports the infix
+notation returned by PySR, Operon, GeneticEngine, ITEA, and EQL, as well as the
+prefix `add`, `sub`, `mul`, and `div` notation returned by gplearn.
+
+Parsing, back-transformation, simplification, and ground-truth comparison have
+separate success and error fields. A timeout or failure therefore cannot
+invalidate the completed algorithm run. Version 2 post-processing uses a
+60-second limit per symbolic stage. Each sidecar records the analysis version,
+timeout, environment, elapsed analysis time, and SHA-256 hash of its source;
+the summarizer rejects stale sidecars.
+
+Run or resume analysis without fitting models using:
+
+```bash
+./scripts/analyze_benchmark_results.py --problem borehole --timeout 60 --jobs 1
+```
+
+Existing sidecars are skipped only when their recorded source hash matches the
+current result JSON. Stale or unreadable sidecars are regenerated automatically;
+`--force` reanalyzes all matching results.
+
+## Structural complexity
+
+The following framework-independent measures are computed from the normalized
+SymPy tree:
+
+- `expression_node_count`: all operator, variable, and constant nodes;
+- `expression_depth`: longest root-to-leaf edge count, with atoms at depth zero;
+- `expression_operator_count` and `expression_operators`;
+- `expression_constant_count`;
+- `expression_variable_count` and `expression_variables`.
+
+The same measures are recorded with a `simplified_` prefix for the smallest
+candidate among the normalized, cancelled, factored, and generally simplified
+forms. The adapter-specific `model_size` is retained
+for debugging and comparison with upstream reports, but it is not suitable as
+the primary cross-framework measure because adapters use different definitions.
+
+Unsimplified `expression_node_count` and `expression_depth` remain available
+whenever parsing succeeds, even if simplification times out. Summaries report
+`complexity_valid_trials`, `complexity_coverage`,
+`simplified_complexity_trials`, and `unsimplified_fallback_trials`. Simplified
+and fallback counts are not silently pooled into one mean.
+
+SymPy canonicalizes associative operations, so normalized node counts measure
+the mathematical expression tree rather than the framework's internal genome
+or serialization syntax. Complexity is evidence about readability, not an
+automatic interpretability verdict: a small but inaccurate or physically
+implausible equation is not considered a good surrogate.
+
+## Runtime measurements
+
+All timings use Python's monotonic high-resolution `perf_counter` inside the
+already running algorithm container:
+
+- `fit_seconds`: the estimator's complete `fit` call;
+- `prediction_seconds`: first prediction over the reference test set;
+- `prediction_mean_seconds`, `prediction_median_seconds`, and
+  `prediction_std_seconds`: repeated complete-test predictions;
+- `prediction_microseconds_per_sample`: median prediction time divided by the
+  test-set size;
+- `expression_extraction_seconds`: adapter expression export and native size;
+- `evaluation_seconds`: fit through expression extraction, excluding symbolic
+  post-processing.
+
+The sidecar's `analysis_seconds` measures parsing, coordinate transformation,
+simplification, and comparison in the fixed project environment. It is reported
+separately and is not part of algorithm runtime.
+
+The suite configuration requests five prediction calls. The first-call value
+captures initialization latency; the median is the preferred steady-use
+comparison because individual sub-millisecond measurements are noisy.
+
+Container startup, image pulling, dataset generation, JSON serialization, and
+one-time installation are excluded. All benchmark containers receive one-thread
+environment settings, but training times still describe algorithm-specific
+configured budgets rather than equal-compute performance. They must not be
+presented as a hardware-normalized speed ranking.
+
+Results are isolated under
+`results/<problem>/<benchmark-name>/<input-scaling>/`, so conditions cannot
+overwrite one another and changing a versioned evaluation protocol cannot
+silently overwrite older results.

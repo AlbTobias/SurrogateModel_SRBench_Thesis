@@ -1,0 +1,452 @@
+# Dataset guide
+
+This directory contains the generated train and reference-test datasets for the
+surrogate-model benchmark. Every table is gzip-compressed, tab-separated, and
+has the form:
+
+```text
+input_1    input_2    ...    target
+```
+
+For Cantilever, Borehole, and Piston, the `target` column is noise-free simulator
+output. CCPP instead contains measured power-plant observations. Symbolic-
+regression methods receive only the input columns and target values. The goal is
+to discover a compact expression that predicts the independent test set. Exact
+symbolic recovery is additionally evaluated only where a generating equation is
+known.
+
+Generated datasets are intentionally excluded from Git because they can be
+reproduced from the scripts in `surrogate/`.
+
+All stored tables contain raw inputs in the physical units and ranges documented
+below. Scaling is performed only inside the evaluator. The normalized benchmark
+condition uses the fixed documented bounds to map every feature to $[-1,1]$;
+it does not rewrite these files or scale the target.
+
+## Common dataset layout
+
+| File | Samples | Purpose |
+|---|---:|---|
+| `data/<problem>/train.tsv.gz` | 400 | Fit the symbolic-regression model |
+| `data/<problem>/test.tsv.gz` | 4,000 | Independent reference evaluation |
+
+Concrete Strength uses all 592 designs remaining after its 400-design training
+selection. Energy Efficiency similarly uses all 368 designs remaining after
+its 400-design training selection. Airfoil Self-Noise uses all 1,103
+observations remaining after its 400-observation training selection.
+Yacht Hydrodynamics uses 210 training and 98 test observations because complete
+hull forms, rather than individual rows, are assigned to partitions.
+
+The train/test generation or selection seeds are fixed. Cantilever uses
+independent uniform random samples. Borehole and Piston use independently seeded
+scrambled Latin hypercube samples. CCPP uses a seeded, non-overlapping selection
+from the original UCI observations.
+
+## 1. Cantilever beam tip deflection
+
+Directory: `data/cantilever/`
+
+The target is a dimensionless form of cantilever-beam tip deflection. The exact
+expression being searched for is
+
+$$
+y = \frac{4 F L^3}{E b h^3},
+$$
+
+where the dataset columns map to the symbols as follows:
+
+| Column | Symbol | Meaning | Range |
+|---|---:|---|---:|
+| `force` | $F$ | Applied force factor | $[0.5, 1.5]$ |
+| `length` | $L$ | Beam length factor | $[0.8, 1.2]$ |
+| `modulus` | $E$ | Elastic-modulus factor | $[0.8, 1.2]$ |
+| `width` | $b$ | Beam width factor | $[0.7, 1.3]$ |
+| `height` | $h$ | Beam height factor | $[0.7, 1.3]$ |
+
+This is the simplest problem in the suite. It primarily tests multiplication,
+division, feature relevance, and recovery of integer powers.
+
+Generator: `surrogate/generate_cantilever.py`
+
+## 2. Borehole water flow
+
+Directory: `data/borehole/`
+
+The target $y$ is water flow through a borehole in $\mathrm{m^3/year}$. Define
+
+$$
+\ell = \log\left(\frac{r}{r_w}\right).
+$$
+
+The exact expression being searched for is
+
+$$
+y =
+\frac{2\pi T_u(H_u-H_l)}
+{\ell\left(1 + \frac{2LT_u}{\ell r_w^2K_w} + \frac{T_u}{T_l}\right)}.
+$$
+
+| Column | Symbol | Meaning | Range |
+|---|---:|---|---:|
+| `borehole_radius` | $r_w$ | Borehole radius (m) | $[0.05, 0.15]$ |
+| `influence_radius` | $r$ | Radius of influence (m) | $[100, 50000]$ |
+| `upper_transmissivity` | $T_u$ | Upper-aquifer transmissivity ($\mathrm{m^2/year}$) | $[63070, 115600]$ |
+| `upper_head` | $H_u$ | Upper-aquifer potentiometric head (m) | $[990, 1110]$ |
+| `lower_transmissivity` | $T_l$ | Lower-aquifer transmissivity ($\mathrm{m^2/year}$) | $[63.1, 116]$ |
+| `lower_head` | $H_l$ | Lower-aquifer potentiometric head (m) | $[700, 820]$ |
+| `borehole_length` | $L$ | Borehole length (m) | $[1120, 1680]$ |
+| `hydraulic_conductivity` | $K_w$ | Borehole hydraulic conductivity (m/year) | $[9855, 12045]$ |
+
+This problem tests an eight-dimensional interaction containing subtraction,
+ratios, a squared variable, and a logarithm across very different input scales.
+
+Generator: `surrogate/generate_borehole.py`
+
+## 3. Piston cycle time
+
+Directory: `data/piston/`
+
+The target $C$ is the piston cycle time in seconds. The ground truth is easiest
+to state using two intermediate expressions:
+
+$$
+A = P_0S + 19.62M - \frac{kV_0}{S},
+$$
+
+$$
+V = \frac{S}{2k}
+\left(\sqrt{A^2 + 4k\frac{P_0V_0}{T_0}T_a} - A\right),
+$$
+
+followed by the exact target equation
+
+$$
+C = 2\pi\sqrt{
+\frac{M}{k + S^2\frac{P_0V_0}{T_0}\frac{T_a}{V^2}}
+}.
+$$
+
+| Column | Symbol | Meaning | Range |
+|---|---:|---|---:|
+| `piston_mass` | $M$ | Piston mass (kg) | $[30, 60]$ |
+| `surface_area` | $S$ | Piston surface area ($\mathrm{m^2}$) | $[0.005, 0.020]$ |
+| `initial_volume` | $V_0$ | Initial gas volume ($\mathrm{m^3}$) | $[0.002, 0.010]$ |
+| `spring_coefficient` | $k$ | Spring coefficient (N/m) | $[1000, 5000]$ |
+| `atmospheric_pressure` | $P_0$ | Atmospheric pressure ($\mathrm{N/m^2}$) | $[90000, 110000]$ |
+| `ambient_temperature` | $T_a$ | Ambient temperature (K) | $[290, 296]$ |
+| `gas_temperature` | $T_0$ | Filling-gas temperature (K) | $[340, 360]$ |
+
+This is the most deeply nested target in the current suite. It tests whether an
+algorithm can approximate or recover coupled division, subtraction, squares,
+and square roots.
+
+Generator: `surrogate/generate_piston.py`
+
+## 4. Combined Cycle Power Plant
+
+Directory: `data/ccpp/`
+
+The target is measured net hourly electrical power output. The empirical
+surrogate equation being searched for has the form
+
+$$
+\widehat{PE} = f(AT, V, AP, RH).
+$$
+
+There is no known ground-truth expression. This problem therefore evaluates
+predictive accuracy, complexity, interpretability, stability, and runtime, but
+not exact equation recovery.
+
+| Column | Symbol | Meaning | Observed source range |
+|---|---:|---|---:|
+| `ambient_temperature` | $AT$ | Ambient temperature (°C) | $[1.81, 37.11]$ |
+| `exhaust_vacuum` | $V$ | Exhaust vacuum (cm Hg) | $[25.36, 81.56]$ |
+| `ambient_pressure` | $AP$ | Ambient pressure (mbar) | $[992.89, 1033.30]$ |
+| `relative_humidity` | $RH$ | Relative humidity (%) | $[25.56, 100.16]$ |
+| `target` | $PE$ | Net electrical power output (MW) | $[420.26, 495.76]$ |
+
+The source contains 9,568 complete observations. A fixed permutation with seed
+20260815 selects 400 training rows and then 4,000 disjoint test rows without
+changing their values. The normalized condition uses the documented full-data
+ranges above, while the target is never scaled.
+
+Source: UCI Combined Cycle Power Plant dataset, DOI
+[`10.24432/C5002N`](https://doi.org/10.24432/C5002N), CC BY 4.0. The source CSV
+is pinned by SHA-256 in the preparation script and benchmark configuration.
+
+Preparation script: `surrogate/prepare_ccpp.py`
+
+## 5. Naval propulsion simulator fuel flow
+
+Directory: `data/naval_propulsion/`
+
+The target is simulated gas-turbine fuel flow for a CODLAG frigate propulsion
+plant. The empirical simulator surrogate being searched for is
+
+$$
+\widehat{m_f} = f(v,k_{Mc},k_{Mt}),
+$$
+
+where $v$ is ship speed, $k_{Mc}$ is compressor health, and $k_{Mt}$ is turbine
+health. No analytical ground-truth equation is published.
+
+| Column | Symbol | Meaning | Full simulator range |
+|---|---:|---|---:|
+| `ship_speed` | $v$ | Ship speed (knots) | $[3,27]$ |
+| `compressor_decay` | $k_{Mc}$ | GT compressor decay coefficient | $[0.95,1]$ |
+| `turbine_decay` | $k_{Mt}$ | GT turbine decay coefficient | $[0.975,1]$ |
+| `target` | $m_f$ | Fuel flow (kg/s) | observed $[0.068,1.832]$ |
+
+The 11,934 cases form the complete $9\times51\times26$ grid of the three
+simulator controls. A permutation with seed 20260816 selects 400 training cases
+and then 4,000 disjoint test cases without changing their values. Exact equation
+recovery is unavailable; predictive accuracy, complexity, stability, and runtime
+remain applicable.
+
+Source: UCI Condition Based Maintenance of Naval Propulsion Plants, DOI
+[`10.24432/C5K31K`](https://doi.org/10.24432/C5K31K). UCI currently marks the
+dataset CC BY 4.0; the archived 2014 README also contains an older
+non-commercial-use notice. Data are downloaded locally and are not committed.
+
+Preparation script: `surrogate/prepare_naval_propulsion.py`
+
+## 6. Light-aircraft wing weight
+
+Directory: `data/wing_weight/`
+
+The exact estimate being searched for is
+
+$$
+W = 0.036S_w^{0.758}W_{fw}^{0.0035}
+\left(\frac{A}{\cos^2\Lambda}\right)^{0.6}q^{0.006}\lambda^{0.04}
+\left(\frac{100t_c}{\cos\Lambda}\right)^{-0.3}
+(N_zW_{dg})^{0.49}+S_wW_p.
+$$
+
+The implementation converts the published sweep angle from degrees to radians
+before evaluating the cosine.
+
+| Column | Symbol | Meaning | Range |
+|---|---:|---|---:|
+| `wing_area` | $S_w$ | Wing area (ft²) | $[150,200]$ |
+| `fuel_weight` | $W_{fw}$ | Fuel weight in wing (lb) | $[220,300]$ |
+| `aspect_ratio` | $A$ | Aspect ratio | $[6,10]$ |
+| `sweep_angle_degrees` | $\Lambda$ | Quarter-chord sweep (degrees) | $[-10,10]$ |
+| `dynamic_pressure` | $q$ | Cruise dynamic pressure (lb/ft²) | $[16,45]$ |
+| `taper_ratio` | $\lambda$ | Taper ratio | $[0.5,1]$ |
+| `thickness_chord_ratio` | $t_c$ | Aerofoil thickness/chord ratio | $[0.08,0.18]$ |
+| `ultimate_load_factor` | $N_z$ | Ultimate load factor | $[2.5,6]$ |
+| `design_gross_weight` | $W_{dg}$ | Design gross weight (lb) | $[1700,2500]$ |
+| `paint_weight` | $W_p$ | Paint weight (lb/ft²) | $[0.025,0.08]$ |
+
+This ten-dimensional benchmark tests fractional powers, weak variable effects,
+a trigonometric term, disparate scales, and an additive contribution. Train and
+test sets are independent scrambled Latin hypercubes using seeds 20260817 and
+20260818.
+
+Source: Forrester, Sóbester, and Keane (2008), *Engineering Design via
+Surrogate Modelling*, DOI [`10.1002/9780470770801`](https://doi.org/10.1002/9780470770801).
+
+Generator: `surrogate/generate_wing_weight.py`
+
+## 7. Gas-turbine nitrogen-oxides emissions
+
+Directory: `data/gas_turbine_nox/`
+
+This measured-data problem searches for a surrogate of the form
+
+$$
+\widehat{NO_x}=f(AT,AP,AH,AFDP,GTEP,TIT,TAT,TEY,CDP).
+$$
+
+| Column | Meaning | Full-data range |
+|---|---|---:|
+| `ambient_temperature` | Ambient temperature (°C) | $[-6.2348,37.103]$ |
+| `ambient_pressure` | Ambient pressure (mbar) | $[985.85,1036.6]$ |
+| `ambient_humidity` | Ambient humidity (%) | $[24.085,100.2]$ |
+| `air_filter_pressure_difference` | Air-filter pressure difference (mbar) | $[2.0874,7.6106]$ |
+| `gas_turbine_exhaust_pressure` | Gas-turbine exhaust pressure (mbar) | $[17.698,40.716]$ |
+| `turbine_inlet_temperature` | Turbine inlet temperature (°C) | $[1000.8,1100.9]$ |
+| `turbine_after_temperature` | Turbine after temperature (°C) | $[511.04,550.61]$ |
+| `turbine_energy_yield` | Turbine energy yield (MWh) | $[100.02,179.5]$ |
+| `compressor_discharge_pressure` | Compressor discharge pressure (mbar) | $[9.8518,15.159]$ |
+| `target` | Nitrogen-oxides emissions, NOx (mg/m³) | $[25.905,119.91]$ |
+
+The target is NOx. The other measured emissions response, CO, is deliberately
+excluded rather than used as an input, preventing target-to-target leakage.
+Following the temporal structure of the source, 400 training rows are sampled
+without replacement from 2011–2013 and 4,000 test rows from the later
+2014–2015 period. Selection uses seed 20260819. This tests generalization across
+operating years rather than interpolation within one random row split. There is
+no known ground-truth equation, so symbolic exact match is not applicable.
+
+Source: UCI Gas Turbine CO and NOx Emission Data Set, DOI
+[`10.24432/C5WC95`](https://doi.org/10.24432/C5WC95), CC BY 4.0. The source
+archive and all five annual files are checksum-pinned; downloaded data are not
+committed.
+
+Preparation script: `surrogate/prepare_gas_turbine_nox.py`
+
+## 8. Concrete compressive strength
+
+Directory: `data/concrete_strength/`
+
+This experimental materials problem searches for a surrogate of the form
+
+$$
+\widehat{f_c}=f(C,S,F,W,P,C_A,F_A,t),
+$$
+
+where $f_c$ is concrete compressive strength.
+
+| Column | Symbol | Meaning | Full-data range |
+|---|---:|---|---:|
+| `cement` | $C$ | Cement (kg/m³) | $[102,540]$ |
+| `blast_furnace_slag` | $S$ | Blast-furnace slag (kg/m³) | $[0,359.4]$ |
+| `fly_ash` | $F$ | Fly ash (kg/m³) | $[0,200.1]$ |
+| `water` | $W$ | Water (kg/m³) | $[121.8,247]$ |
+| `superplasticizer` | $P$ | Superplasticizer (kg/m³) | $[0,32.2]$ |
+| `coarse_aggregate` | $C_A$ | Coarse aggregate (kg/m³) | $[801,1145]$ |
+| `fine_aggregate` | $F_A$ | Fine aggregate (kg/m³) | $[594,992.6]$ |
+| `age` | $t$ | Curing age (days) | $[1,365]$ |
+| `target` | $f_c$ | Compressive strength (MPa) | $[2.33,82.6]$ |
+
+The UCI CSV contains 1,030 measurements but only 992 distinct combinations of
+the eight inputs. Targets are averaged within identical input designs before
+splitting, representing expected measured strength and preventing the same mix
+and age from leaking into both partitions. A permutation with seed 20260820
+selects 400 designs for training and all remaining 592 for testing. There is no
+known ground-truth equation, so symbolic exact match is unavailable.
+
+Source: UCI Concrete Compressive Strength, DOI
+[`10.24432/C5PK67`](https://doi.org/10.24432/C5PK67), CC BY 4.0. The direct
+UCI CSV is checksum-pinned and downloaded data are not committed.
+
+Preparation script: `surrogate/prepare_concrete_strength.py`
+
+## 9. Residential-building heating load
+
+Directory: `data/energy_efficiency_heating/`
+
+This simulator-derived problem searches for an empirical surrogate of the form
+
+$$
+\widehat{HL}=f(RC,S_A,W_A,R_A,H,O,G_A,G_D).
+$$
+
+| Column | Meaning | Published design range |
+|---|---|---:|
+| `relative_compactness` | Relative compactness | $[0.62,0.98]$ |
+| `surface_area` | Surface area | $[514.5,808.5]$ |
+| `wall_area` | Wall area | $[245,416.5]$ |
+| `roof_area` | Roof area | $[110.25,220.5]$ |
+| `overall_height` | Overall height | $[3.5,7]$ |
+| `orientation` | Orientation code | $[2,5]$ |
+| `glazing_area` | Glazing area | $[0,0.4]$ |
+| `glazing_area_distribution` | Glazing-area distribution code | $[0,5]$ |
+| `target` | Heating load | observed $[6.01,43.10]$ |
+
+All 768 input designs are unique. A permutation with seed 20260901 assigns 400
+designs to training and the remaining 368 to testing. Cooling load is excluded
+rather than supplied as an input. The two integer-coded design variables are
+retained as published; algebraic use of their numeric ordering must therefore
+be interpreted cautiously.
+
+Source: UCI Energy Efficiency dataset, DOI
+[`10.24432/C51307`](https://doi.org/10.24432/C51307), CC BY 4.0. The source CSV
+is checksum-pinned and downloaded on demand.
+
+Preparation script: `surrogate/prepare_energy_efficiency_heating.py`
+
+## 10. Airfoil self-noise
+
+Directory: `data/airfoil_self_noise/`
+
+This experimental aeroacoustic problem searches for a surrogate of the form
+
+$$
+\widehat{SPL}=f(frequency,\alpha,c,U,\delta_s).
+$$
+
+| Column | Meaning | Published dataset range |
+|---|---|---:|
+| `frequency` | Frequency (Hz) | $[200,20000]$ |
+| `angle_of_attack` | Angle of attack (degrees) | $[0,22.2]$ |
+| `chord_length` | Airfoil chord length (m) | $[0.0254,0.3048]$ |
+| `free_stream_velocity` | Free-stream velocity (m/s) | $[31.7,71.3]$ |
+| `suction_side_displacement_thickness` | Suction-side displacement thickness (m) | $[0.000400682,0.0584113]$ |
+| `target` | Scaled sound-pressure level (dB) | observed $[103.380,140.987]$ |
+
+All 1,503 input designs are unique. A permutation with seed 20260902 assigns
+400 observations to training and all remaining 1,103 to testing. No values are
+transformed during dataset preparation.
+
+Source: UCI Airfoil Self-Noise, DOI
+[`10.24432/C5VW2C`](https://doi.org/10.24432/C5VW2C), CC BY 4.0. The source
+archive and contained data member are checksum-pinned and downloaded on demand.
+
+Preparation script: `surrogate/prepare_airfoil_self_noise.py`
+
+## 11. OTL circuit midpoint voltage
+
+Directory: `data/otl_circuit/`
+
+Six resistance and current-gain inputs predict circuit midpoint voltage. The
+published domains are encoded in `surrogate/problem_metadata.py`. Independent
+scrambled Latin hypercubes contain 400 training and 4,000 test points.
+
+Generator: `surrogate/generate_otl_circuit.py`
+
+## 12. Robot-arm endpoint distance
+
+Directory: `data/robot_arm/`
+
+Four angles in $[0,2\pi]$ and four segment lengths in $[0,1]$ predict the
+distance between the arm endpoint and origin. Independent scrambled Latin
+hypercubes contain 400 training and 4,000 test points.
+
+Generator: `surrogate/generate_robot_arm.py`
+
+## 13. Yacht hydrodynamics
+
+Directory: `data/yacht_hydrodynamics/`
+
+Five hull coefficients and Froude number predict residuary resistance per unit
+displacement. Fifteen complete hull forms provide 210 training rows and seven
+different hull forms provide 98 test rows; no hull design occurs in both sets.
+
+Preparation script: `surrogate/prepare_yacht_hydrodynamics.py`
+
+## 14. Electrical-grid stability
+
+Directory: `data/electrical_grid_stability/`
+
+Eleven continuous simulator inputs predict the `stab` regression response. The
+deterministic `p1` column and categorical `stabf` response are not exposed to
+estimators. The split contains 400 training and 4,000 test simulations.
+
+Preparation script: `surrogate/prepare_electrical_grid_stability.py`
+
+## 15. Lattice-physics $k_{\mathrm{inf}}$
+
+Directory: `data/lattice_physics_kinf/`
+
+Thirty-nine fuel-pin enrichment inputs in $[0.7,5.0]$ predict the MCNP6
+infinite multiplication factor. The pin-power response is excluded. The split
+contains 400 training and 4,000 test simulations.
+
+Preparation script: `surrogate/prepare_lattice_physics_kinf.py`
+
+## How results are judged
+
+The current evaluator reports test-set RMSE, range-normalized RMSE, MAE, maximum
+absolute error, $R^2$, runtime, and framework-independent SymPy expression
+structure. For analytical problems it also tests exact algebraic agreement with
+the equations above. A high $R^2$ alone does not prove equation recovery: two expressions may predict
+similarly over these ranges while behaving differently elsewhere. Conversely,
+an expression written in a different but algebraically equivalent form should
+count as successful symbolic recovery. Predictive and symbolic-fidelity results
+should therefore be reported separately in the thesis. For CCPP and Naval
+Propulsion, exact-match fields remain unavailable rather than being counted as
+failures. The same applies to Gas Turbine NOx Emissions, Concrete Compressive
+Strength, Energy Efficiency, and Airfoil Self-Noise.
