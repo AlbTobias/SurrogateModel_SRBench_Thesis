@@ -128,14 +128,27 @@ docker version
 ```
 
 The algorithm containers are CPU-only in this workflow. Shared execution
-controls request one thread per trial.
+controls request one thread per trial. Docker pulls a pinned image automatically
+when its framework is first executed. On the development system, the complete
+six-image set occupied approximately 20 GB, at least 25 GB of free space is
+recommended when running every framework. A single-framework test requires only
+that framework's image.
+
+The analytical problems Cantilever, Borehole, Piston, Wing Weight, OTL Circuit,
+and Robot Arm are generated locally after the Python dependencies have been
+installed. The remaining problems download their external source data on first
+use, verify the configured hashes, and cache the sources below `data/`.
+
+Before starting a benchmark, run the focused host-side checks described in
+[Tests](#tests).
 
 ## Running the benchmark
 
 ### One trial
 
 The trial runner accepts an algorithm, repetition label, problem, and scaling
-condition:
+condition. The following command targets the published v11 result namespace and
+is intended only when deliberately reproducing or replacing that trial:
 
 ```bash
 BENCHMARK_CONFIG=configs/benchmark_suite_v11.json \
@@ -148,7 +161,7 @@ Valid scaling conditions are `raw` and `domain_minmax`.
 
 This command runs all six frameworks, both scaling conditions, and all ten
 repetitions for one problem. It then performs symbolic analysis and writes the
-per-problem summaries:
+per-problem summaries. Unlike the single-trial runner, the group runner executes the complete fitting, analysis, and summarization workflow:
 
 ```bash
 BENCHMARK_CONFIG=configs/benchmark_suite_v11.json \
